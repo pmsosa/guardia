@@ -30,10 +30,23 @@ def build_report(
     supply: Optional[SupplyChainResult],
     ai: Optional[AIReviewResult],
 ) -> GuardiaReport:
+    # Static analysis is broad and noisy by design. When the AI review and
+    # ClamAV both clear a package, cap static's contribution to MEDIUM so
+    # pattern noise doesn't dominate the verdict. CRITICAL (pipe-to-shell) is
+    # never capped — that pattern is almost never a false positive.
+    ai_clear = ai is not None and not ai.skipped and ai.risk in (RiskLevel.LOW, RiskLevel.CLEAN)
+    # ClamAV counts as "not a threat" when it's clean or simply unavailable/skipped
+    clamav_no_threat = clamav is None or clamav.skipped or clamav.risk == RiskLevel.CLEAN
+    effective_static_risk = static.risk if static else None
+    if (effective_static_risk == RiskLevel.HIGH and ai_clear and clamav_no_threat):
+        effective_static_risk = RiskLevel.MEDIUM
+
     active_risks = [
-        r.risk for r in [metadata, clamav, static, supply, ai]
+        r.risk for r in [metadata, clamav, supply, ai]
         if r is not None
     ]
+    if effective_static_risk is not None:
+        active_risks.append(effective_static_risk)
     overall = aggregate_risk(active_risks)
 
     return GuardiaReport(
@@ -153,10 +166,10 @@ def _print_ai_row(console, result: Optional[AIReviewResult]) -> None:
 
     if result.skipped and result.skip_reason:
         console.print(f"      [dim]{result.skip_reason}[/dim]")
-    elif result.verdict:
-        console.print(f"      [dim]{result.verdict[:120]}[/dim]")
-    elif result.summary:
-        console.print(f"      [dim]{result.summary[:120]}[/dim]")
+    else:
+        files_note = f"{result.files_checked} file(s) reviewed. " if result.files_checked is not None else ""
+        blurb = result.verdict or result.summary or ""
+        console.print(f"      [dim]{files_note}{blurb[:120]}[/dim]")
 
 
 def _print_issues(console, report: GuardiaReport) -> None:
@@ -314,6 +327,7 @@ def _render_json(report: GuardiaReport) -> str:
             base["summary"] = m.summary
             base["verdict"] = m.verdict
             base["backend"] = m.backend
+            base["files_checked"] = m.files_checked
         return base
 
     data = {

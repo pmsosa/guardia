@@ -50,7 +50,7 @@ _COMMENT_RE = re.compile(r'^\s*(?:#|//|/\*|\*)')
 _p("shell_exec", "warn",   r'\beval\s*[\(\{]', "eval() call — dynamic code execution")
 _p("shell_exec", "critical", r'`[^`]{5,}`', "Backtick shell execution: `{match}`", skip_exts=_BACKTICK_SKIP, skip_comments=True)
 _p("shell_exec", "warn",   r'\bexec\s*\(', "exec() call")
-_p("shell_exec", "warn",   r'\bsystem\s*\(', "system() call")
+_p("shell_exec", "warn",   r'\bsystem\s*\(', "system() call", skip_exts=_DOC_EXTS)
 _p("shell_exec", "warn",   r'subprocess\.(call|run|Popen)\s*\(.*shell\s*=\s*True', "subprocess with shell=True")
 _p("shell_exec", "warn",   r'\bos\.system\s*\(', "os.system() call")
 _p("shell_exec", "warn",   r'require\s*\(?\s*[\'"]child_process[\'"]', "Node.js child_process import")
@@ -62,8 +62,10 @@ _p("network",    "info",   r'\bwget\b', "wget network call")
 _p("network",    "info",   r'requests\.(get|post|put|patch|delete|head)\s*\(', "requests HTTP call")
 _p("network",    "info",   r'urllib\.request', "urllib network call")
 _p("network",    "info",   r'fetch\s*\(', "fetch() network call")
-_p("network",    "warn",   r'\b(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\b', "Hardcoded IP address")
-_p("network",    "warn",   r'http://(?!localhost|127\.0\.0\.1|0\.0\.0\.0)\S+', "Non-HTTPS URL")
+# IPs in configure/test scripts are routine; flag as info only
+_p("network",    "info",   r'\b(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\b', "Hardcoded IP address")
+# Non-HTTPS URLs in changelogs/licenses are not suspicious
+_p("network",    "warn",   r'http://(?!localhost|127\.0\.0\.1|0\.0\.0\.0)\S+', "Non-HTTPS URL", skip_exts=_DOC_EXTS)
 
 # Pipe to shell — critical
 _p("pipe_shell", "critical", r'(curl|wget)\s+\S+.*\|\s*(ba)?sh\b', "Pipe download to shell: {match}")

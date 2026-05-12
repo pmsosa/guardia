@@ -117,6 +117,7 @@ def _standard_review(
 
     content_parts: list[str] = []
     total_chars = 0
+    files_checked = 0
     base = Path(path)
 
     # Prioritize: formula source, then small source files
@@ -129,6 +130,7 @@ def _standard_review(
             break
         content_parts.append(chunk)
         total_chars += len(chunk)
+        files_checked += 1
 
     if target.formula_source:
         formula_header = "--- HOMEBREW FORMULA (formula.rb) ---\n" + target.formula_source
@@ -138,7 +140,9 @@ def _standard_review(
     user_message = f"Please review the following code:\n\n{code_content}"
 
     raw = _call_backend(backend, user_message, config, timeout=120)
-    return _parse_response(raw, backend)
+    result = _parse_response(raw, backend)
+    result.files_checked = files_checked
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -153,6 +157,7 @@ def _deep_review(
 
     base = Path(path)
     all_files = _collect_files(base, max_chars=None)
+    files_checked = len(all_files)
 
     if chunking == "file_by_file":
         chunks = [(rel, content) for rel, content in all_files]
@@ -186,7 +191,9 @@ def _deep_review(
             error="All deep review chunks failed",
         )
 
-    return _consolidate_results(partial_results, backend)
+    result = _consolidate_results(partial_results, backend)
+    result.files_checked = files_checked
+    return result
 
 
 def _sliding_window(text: str, chunk_size: int, overlap: int) -> list[str]:

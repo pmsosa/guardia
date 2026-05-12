@@ -8,7 +8,8 @@
       "Bash(.venv/bin/guardia --local . --no-clam --no-ai --output markdown)",
       "Bash(.venv/bin/guardia --version)",
       "Bash(.venv/bin/python -c \"from guardia.modules import ai_review, clamav, metadata, report, resolver, static_analysis, supply_chain; print\\('All modules import OK'\\)\")",
-      "Bash(.venv/bin/python -c \"from guardia.cli import main; print\\('OK'\\)\")"
+      "Bash(.venv/bin/python -c \"from guardia.cli import main; print\\('OK'\\)\")",
+      "Bash(.venv/bin/guardia --brew ffmpeg --force)"
     ]
   }
 }

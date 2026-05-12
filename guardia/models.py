@@ -127,6 +127,7 @@ class AIReviewResult:
     flags: list[Flag] = field(default_factory=list)
     verdict: str = ""
     backend: Optional[str] = None  # "api" | "cli"
+    files_checked: Optional[int] = None
     skipped: bool = False
     skip_reason: str = ""
     error: Optional[str] = None
