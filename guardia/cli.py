@@ -200,6 +200,9 @@ def main(
     # ----------------------------------------------------------------- target
     target_type, target_value = _resolve_target_args(target_brew, target_git, target_local)
 
+    if output_fmt == "terminal" and not quiet:
+        _print_banner()
+
     # ------------------------------------------------------- first-run prompts
     if not no_ai:
         _maybe_prompt_api_key(cfg)
@@ -399,13 +402,24 @@ def _maybe_prompt_api_key(cfg: dict) -> None:
         )
 
 
+def _print_banner() -> None:
+    try:
+        from rich.console import Console
+        Console(highlight=False).print(
+            f"\n[bold blue]  ⛨  guardia[/bold blue]"
+            f"  [dim]v{__version__}  ·  security analysis[/dim]\n"
+        )
+    except ImportError:
+        click.echo(f"\n  ⛨  guardia v{__version__}  ·  security analysis\n")
+
+
 def _echo_step(msg: str, verbose: bool) -> None:
     if verbose:
-        click.echo(f"  → {msg}")
+        click.echo(click.style("  ▸ ", fg="cyan") + click.style(msg, dim=True))
 
 
 def _fatal(msg: str) -> None:
-    click.echo(f"Error: {msg}", err=True)
+    click.echo(click.style("  ✗  Error: ", fg="red", bold=True) + msg, err=True)
     sys.exit(1)
 
 

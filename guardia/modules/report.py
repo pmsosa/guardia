@@ -79,13 +79,11 @@ def render(report: GuardiaReport, fmt: str, quiet: bool = False) -> str:
 
 def _render_terminal(report: GuardiaReport, quiet: bool) -> str:
     try:
-        from rich.console import Console
-        from rich.panel import Panel
-        from rich.table import Table
-        from rich import box
         import io
+        import sys
+        from rich.console import Console
         buf = io.StringIO()
-        console = Console(file=buf, highlight=False, markup=True)
+        console = Console(file=buf, highlight=False, markup=True, force_terminal=sys.stdout.isatty())
         _rich_report(console, report, quiet)
         return buf.getvalue()
     except ImportError:
@@ -94,25 +92,25 @@ def _render_terminal(report: GuardiaReport, quiet: bool) -> str:
 
 def _rich_report(console, report: GuardiaReport, quiet: bool) -> None:
     from rich.panel import Panel
-    from rich.table import Table
+    from rich.rule import Rule
     from rich import box
 
-    ts = report.timestamp.strftime("%Y-%m-%d %H:%M:%S UTC")
-    target_label = f"{report.target.raw} ({report.target.type})"
+    ts = report.timestamp.strftime("%Y-%m-%d %H:%M UTC")
+    target_label = f"[bold]{report.target.raw}[/bold]  [dim]({report.target.type})[/dim]"
 
     if not quiet:
         console.print(Panel(
-            f"  [bold]guardia report[/bold]\n"
-            f"  Target:  {target_label}\n"
-            f"  Scanned: {ts}",
-            box=box.HEAVY_HEAD,
-            style="bold blue",
+            f"  [bold]Target:[/bold]   {target_label}\n"
+            f"  [bold]Scanned:[/bold]  [dim]{ts}[/dim]",
+            title="[bold blue]⛨  guardia[/bold blue]",
+            box=box.ROUNDED,
+            border_style="blue",
             expand=False,
             padding=(0, 2),
         ))
         console.print()
-
-    if not quiet:
+        console.print(Rule("[dim]scan results[/dim]", style="dim"))
+        console.print()
         _print_module_row(console, "Metadata & Reputation", report.metadata)
         _print_module_row(console, "ClamAV Scan", report.clamav)
         _print_module_row(console, "Static Analysis", report.static_analysis)
@@ -125,10 +123,12 @@ def _rich_report(console, report: GuardiaReport, quiet: bool) -> None:
     verdict_text = _overall_verdict_text(report)
 
     console.print(Panel(
-        f"  [{risk_color}][bold]{icon} OVERALL VERDICT: {report.overall_risk.upper()} — {verdict_text}[/bold][/{risk_color}]",
-        box=box.HEAVY_HEAD,
+        f"  [{risk_color}][bold]{icon}  {report.overall_risk.upper()}[/bold]  {verdict_text}[/{risk_color}]",
+        title="[bold]verdict[/bold]",
+        box=box.HEAVY,
+        border_style=risk_color,
         expand=False,
-        padding=(0, 2),
+        padding=(0, 1),
     ))
 
     if not quiet:
@@ -145,7 +145,7 @@ def _print_module_row(console, label: str, result) -> None:
 
     detail = _module_detail(result)
     console.print(
-        f"  [{color}][{icon}][/{color}] {label:<30} [{color}]{risk_label}[/{color}]"
+        f"  [{color}][{icon}] {label:<30} [bold]{risk_label}[/bold][/{color}]"
     )
     if detail:
         console.print(f"      [dim]{detail}[/dim]")
@@ -161,7 +161,7 @@ def _print_ai_row(console, result: Optional[AIReviewResult]) -> None:
 
     backend_tag = f"  [dim][via {result.backend}][/dim]" if result.backend else ""
     console.print(
-        f"  [{color}][{icon}][/{color}] {'Claude AI Review':<30} [{color}]{risk_label}[/{color}]{backend_tag}"
+        f"  [{color}][{icon}] {'Claude AI Review':<30} [bold]{risk_label}[/bold][/{color}]{backend_tag}"
     )
 
     if result.skipped and result.skip_reason:
@@ -180,17 +180,18 @@ def _print_issues(console, report: GuardiaReport) -> None:
 
     warn_flags = [f for f in all_flags if f.severity in ("warn", "critical")]
     if not warn_flags:
+        console.print("  [green dim]✓  No issues flagged[/green dim]")
         return
 
     console.print()
-    console.print("  [bold]Issues:[/bold]")
-    for f in warn_flags[:20]:  # cap at 20 in terminal view
+    console.print("  [bold]Issues[/bold]")
+    for f in warn_flags[:20]:
         loc = f"  [dim]{f.format_location()}[/dim]" if f.format_location() else ""
-        sev_color = "red" if f.severity == "critical" else "yellow"
-        console.print(f"    [{sev_color}]·[/{sev_color}]{loc}  {f.message}")
+        sev_color = "bright_red" if f.severity == "critical" else "yellow"
+        console.print(f"    [{sev_color}]▸[/{sev_color}]{loc}  {f.message}")
 
     if len(warn_flags) > 20:
-        console.print(f"    [dim]... and {len(warn_flags) - 20} more (use --output json for full list)[/dim]")
+        console.print(f"    [dim]… and {len(warn_flags) - 20} more  (use --output json for full list)[/dim]")
 
 
 def _module_detail(result) -> str:
