@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import shutil
 import sys
 from pathlib import Path
 from typing import Optional
@@ -13,12 +15,99 @@ from .cache import (
     clear_expired,
     compute_directory_hash,
     compute_string_hash,
+    deserialize_scan_results,
     load_cache,
     save_cache,
+    serialize_scan_results,
 )
-from .config import get_anthropic_key, load_config, save_config
+from .config import CONFIG_FILE, get_anthropic_key, load_config, save_config
 from .models import GuardiaReport, RiskLevel
 from .modules import ai_review, clamav, metadata, report, resolver, static_analysis, supply_chain
+
+
+# ---------------------------------------------------------------------------
+# Setup wizard
+# ---------------------------------------------------------------------------
+
+def _run_setup(ctx: click.Context, _param: click.Parameter, value: bool) -> None:
+    if not value or ctx.resilient_parsing:
+        return
+
+    click.echo("\nguardia setup\n" + "─" * 40)
+    cfg = load_config()
+    changed = False
+
+    # ── ClamAV ──────────────────────────────────────────────────────────────
+    click.echo("\n[1/2] ClamAV antivirus")
+    if clamav.check_installed():
+        age = clamav.definitions_age_days()
+        if age is None:
+            click.echo("  ✓ ClamAV installed (definition age unknown)")
+        elif age >= 1:
+            click.echo(f"  ✓ ClamAV installed, definitions are {age} day(s) old")
+            if click.confirm("  Update virus definitions now?", default=True):
+                click.echo("  Updating…")
+                clamav.update_definitions()
+                click.echo("  ✓ Definitions updated")
+        else:
+            click.echo("  ✓ ClamAV installed, definitions up to date")
+    else:
+        click.echo("  ✗ ClamAV not found")
+        if click.confirm("  Install ClamAV via Homebrew now?", default=True):
+            click.echo("  Installing…")
+            if clamav.install_clamav():
+                click.echo("  ✓ ClamAV installed")
+            else:
+                click.echo("  ✗ Installation failed — install manually: brew install clamav")
+        else:
+            click.echo("  ⚠ Skipping — antivirus scans will be unavailable")
+
+    # ── AI backend ──────────────────────────────────────────────────────────
+    click.echo("\n[2/2] AI code review backend")
+
+    existing_key = get_anthropic_key(cfg)
+    claude_cli = shutil.which("claude")
+
+    if existing_key:
+        source = "environment variable" if os.environ.get("ANTHROPIC_API_KEY") else "config file"
+        click.echo(f"  ✓ ANTHROPIC_API_KEY found ({source})")
+    else:
+        click.echo("  ✗ ANTHROPIC_API_KEY not set")
+
+    if claude_cli:
+        click.echo(f"  ✓ Claude CLI found at {claude_cli}")
+    else:
+        click.echo("  ✗ Claude CLI not found on PATH")
+
+    if not existing_key and not claude_cli:
+        click.echo("\n  Choose an AI backend:")
+        click.echo("    1) Enter an Anthropic API key (saved to ~/.guardia/config.toml)")
+        click.echo("    2) Install Claude CLI (brew install --cask claude)")
+        click.echo("    3) Skip — AI review will be disabled")
+        choice = click.prompt("  Choice", type=click.Choice(["1", "2", "3"]), default="1")
+
+        if choice == "1":
+            key = click.prompt("  Paste your ANTHROPIC_API_KEY", hide_input=True).strip()
+            if key:
+                cfg["api"]["anthropic_key"] = key
+                changed = True
+                click.echo("  ✓ API key saved to ~/.guardia/config.toml")
+            else:
+                click.echo("  ⚠ Empty key — skipping")
+        elif choice == "2":
+            click.echo("  Run: brew install --cask claude")
+            click.echo("  Then re-run: guardia --setup")
+        else:
+            click.echo("  ⚠ AI review will be skipped during scans")
+
+    if changed:
+        save_config(cfg)
+
+    # ── Summary ─────────────────────────────────────────────────────────────
+    click.echo("\n" + "─" * 40)
+    click.echo(f"Config file: {CONFIG_FILE}")
+    click.echo("Setup complete. Run `guardia --help` to get started.\n")
+    ctx.exit()
 
 
 # ---------------------------------------------------------------------------
@@ -27,6 +116,8 @@ from .modules import ai_review, clamav, metadata, report, resolver, static_analy
 
 @click.command(context_settings={"help_option_names": ["-h", "--help"]})
 @click.version_option(__version__, "-V", "--version")
+@click.option("--setup", is_flag=True, is_eager=True, expose_value=False, callback=_run_setup,
+              help="Run the interactive setup wizard (ClamAV + AI backend)")
 # Target selection (mutually exclusive, at least one required)
 @click.option("--brew", "target_brew", metavar="FORMULA",
               help="Analyze a Homebrew formula (e.g. ffmpeg, org/tap/formula)")
@@ -123,10 +214,18 @@ def main(
             content_hash = compute_string_hash(target_value)
 
         cached = load_cache(content_hash, ttl_days)
-        if cached:
+        if cached and "metadata" in cached:
             if verbose:
                 click.echo("  ← Returning cached result")
-            click.echo(cached.get("rendered_output", "(no cached output)"))
+            meta_r, clam_r, static_r, supply_r, ai_r = deserialize_scan_results(cached)
+            if no_clam:
+                from .models import ClamAVResult
+                clam_r = ClamAVResult(risk=RiskLevel.SKIPPED, skipped=True, skip_reason="Skipped via --no-clam")
+            if no_ai:
+                from .models import AIReviewResult
+                ai_r = AIReviewResult(risk=RiskLevel.SKIPPED, skipped=True, skip_reason="Skipped via --no-ai")
+            cached_report = report.build_report(scan_target, meta_r, clam_r, static_r, supply_r, ai_r)
+            click.echo(report.render(cached_report, output_fmt, quiet=quiet))
             resolver.cleanup(scan_target)
             sys.exit(0)
 
@@ -191,7 +290,9 @@ def main(
     # -------------------------------------------------------- cache save
     if content_hash:
         try:
-            save_cache(content_hash, {"rendered_output": output_text})
+            save_cache(content_hash, serialize_scan_results(
+                meta_result, clam_result, static_result, supply_result, ai_result
+            ))
         except Exception:
             pass
 

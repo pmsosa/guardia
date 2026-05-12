@@ -4,9 +4,151 @@ import datetime
 import hashlib
 import json
 from pathlib import Path
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 from .config import CACHE_DIR
+
+if TYPE_CHECKING:
+    from .models import MetadataResult, ClamAVResult, StaticAnalysisResult, SupplyChainResult, AIReviewResult
+
+
+# ---------------------------------------------------------------------------
+# Module result serialization / deserialization
+# ---------------------------------------------------------------------------
+
+def _flags_to_list(flags) -> list[dict]:
+    return [
+        {"message": f.message, "severity": f.severity,
+         "file": f.file, "line": f.line, "category": f.category}
+        for f in (flags or [])
+    ]
+
+
+def _flags_from_list(lst: list[dict]):
+    from .models import Flag
+    return [Flag(**d) for d in (lst or [])]
+
+
+def _base(m) -> dict:
+    return {
+        "risk": m.risk.value,
+        "skipped": m.skipped,
+        "skip_reason": getattr(m, "skip_reason", ""),
+        "error": getattr(m, "error", None),
+    }
+
+
+def serialize_scan_results(meta, clam, static, supply, ai) -> dict:
+    def ser_meta(m):
+        if m is None:
+            return None
+        d = _base(m)
+        d.update(flags=_flags_to_list(m.flags), repo_age_days=m.repo_age_days,
+                 stars=m.stars, forks=m.forks, contributors=m.contributors, is_fork=m.is_fork)
+        return d
+
+    def ser_clam(m):
+        if m is None:
+            return None
+        d = _base(m)
+        d.update(files_scanned=m.files_scanned, infected=m.infected)
+        return d
+
+    def ser_static(m):
+        if m is None:
+            return None
+        d = _base(m)
+        d.update(flags=_flags_to_list(m.flags), files_scanned=m.files_scanned)
+        return d
+
+    def ser_supply(m):
+        if m is None:
+            return None
+        d = _base(m)
+        d.update(flags=_flags_to_list(m.flags), dependencies=m.dependencies)
+        return d
+
+    def ser_ai(m):
+        if m is None:
+            return None
+        d = _base(m)
+        d.update(flags=_flags_to_list(m.flags), summary=m.summary,
+                 verdict=m.verdict, backend=m.backend)
+        return d
+
+    return {
+        "metadata": ser_meta(meta),
+        "clamav": ser_clam(clam),
+        "static_analysis": ser_static(static),
+        "supply_chain": ser_supply(supply),
+        "ai_review": ser_ai(ai),
+    }
+
+
+def deserialize_scan_results(data: dict):
+    from .models import (
+        MetadataResult, ClamAVResult, StaticAnalysisResult,
+        SupplyChainResult, AIReviewResult, RiskLevel,
+    )
+
+    def rl(s):
+        return RiskLevel(s)
+
+    def deser_meta(d) -> Optional[MetadataResult]:
+        if d is None:
+            return None
+        return MetadataResult(
+            risk=rl(d["risk"]), flags=_flags_from_list(d.get("flags")),
+            repo_age_days=d.get("repo_age_days"), stars=d.get("stars"),
+            forks=d.get("forks"), contributors=d.get("contributors"),
+            is_fork=d.get("is_fork"), skipped=d.get("skipped", False),
+            skip_reason=d.get("skip_reason", ""), error=d.get("error"),
+        )
+
+    def deser_clam(d) -> Optional[ClamAVResult]:
+        if d is None:
+            return None
+        return ClamAVResult(
+            risk=rl(d["risk"]), files_scanned=d.get("files_scanned", 0),
+            infected=d.get("infected", []), skipped=d.get("skipped", False),
+            skip_reason=d.get("skip_reason", ""), error=d.get("error"),
+        )
+
+    def deser_static(d) -> Optional[StaticAnalysisResult]:
+        if d is None:
+            return None
+        return StaticAnalysisResult(
+            risk=rl(d["risk"]), flags=_flags_from_list(d.get("flags")),
+            files_scanned=d.get("files_scanned", 0), skipped=d.get("skipped", False),
+            skip_reason=d.get("skip_reason", ""), error=d.get("error"),
+        )
+
+    def deser_supply(d) -> Optional[SupplyChainResult]:
+        if d is None:
+            return None
+        return SupplyChainResult(
+            risk=rl(d["risk"]), flags=_flags_from_list(d.get("flags")),
+            dependencies=d.get("dependencies", []), skipped=d.get("skipped", False),
+            skip_reason=d.get("skip_reason", ""), error=d.get("error"),
+        )
+
+    def deser_ai(d) -> Optional[AIReviewResult]:
+        if d is None:
+            return None
+        return AIReviewResult(
+            risk=rl(d["risk"]), flags=_flags_from_list(d.get("flags")),
+            summary=d.get("summary", ""), verdict=d.get("verdict", ""),
+            backend=d.get("backend"), skipped=d.get("skipped", False),
+            skip_reason=d.get("skip_reason", ""), error=d.get("error"),
+        )
+
+    return (
+        deser_meta(data.get("metadata")),
+        deser_clam(data.get("clamav")),
+        deser_static(data.get("static_analysis")),
+        deser_supply(data.get("supply_chain")),
+        deser_ai(data.get("ai_review")),
+    )
 
 
 def compute_directory_hash(directory: str) -> str:
