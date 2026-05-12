@@ -1,5 +1,16 @@
 # guardia
 
+<p align="center">
+  <img src="guardia.jpg" alt="guardia" width="480"/>
+</p>
+
+<p align="center">
+  <a href="https://github.com/pmsosa/guardia"><img src="https://badgen.net/badge/version/0.1.0/blue" alt="version"></a>
+  <a href="https://github.com/pmsosa/guardia/blob/main/LICENSE"><img src="https://badgen.net/github/license/pmsosa/guardia" alt="license"></a>
+  <a href="https://github.com/pmsosa/guardia"><img src="https://badgen.net/badge/python/3.10%2B/green" alt="python"></a>
+  <a href="https://github.com/pmsosa/guardia/stargazers"><img src="https://badgen.net/github/stars/pmsosa/guardia" alt="stars"></a>
+</p>
+
 **Multi-layered security analysis for packages, repositories, and local directories.**
 
 `guardia` combines antivirus scanning (ClamAV), static heuristic analysis, supply chain inspection, and AI-powered code review (Claude) to produce a structured risk report before you install or run third-party code.
