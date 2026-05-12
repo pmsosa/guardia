@@ -1,7 +1,7 @@
 # guardia
 
 <p align="center">
-  <img src="guardia.jpg" alt="guardia" width="480"/>
+  <img src="guardia.jpg" alt="guardia"/>
 </p>
 
 <p align="center">
