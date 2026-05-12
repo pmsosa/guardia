@@ -40,9 +40,20 @@ def _run_setup(ctx: click.Context, _param: click.Parameter, value: bool) -> None
     # ── ClamAV ──────────────────────────────────────────────────────────────
     click.echo("\n[1/2] ClamAV antivirus")
     if clamav.check_installed():
+        if not clamav.configs_exist():
+            click.echo("  ⚠ ClamAV installed but config files missing (Homebrew default)")
+            click.echo("  Setting up config files…")
+            if clamav.setup_configs():
+                click.echo("  ✓ Config files created")
+            else:
+                click.echo("  ✗ Failed to create config files — check permissions on /opt/homebrew/etc/clamav/")
         age = clamav.definitions_age_days()
         if age is None:
-            click.echo("  ✓ ClamAV installed (definition age unknown)")
+            click.echo("  ✓ ClamAV installed (no definitions yet)")
+            if click.confirm("  Download virus definitions now?", default=True):
+                click.echo("  Downloading…")
+                clamav.update_definitions()
+                click.echo("  ✓ Definitions downloaded")
         elif age >= 1:
             click.echo(f"  ✓ ClamAV installed, definitions are {age} day(s) old")
             if click.confirm("  Update virus definitions now?", default=True):
