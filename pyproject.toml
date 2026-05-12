@@ -1,0 +1,66 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "guardia"
+version = "0.1.0"
+description = "Multi-layered security analysis for packages, repositories, and local directories"
+authors = [{ name = "Pedro M. Sosa", email = "sosavpm@gmail.com" }]
+license = { text = "BSD-3-Clause" }
+readme = "README.md"
+requires-python = ">=3.10"
+keywords = ["security", "static-analysis", "malware", "homebrew", "supply-chain"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: BSD License",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+    "Topic :: Software Development :: Quality Assurance",
+]
+
+dependencies = [
+    "click>=8.1",
+    "requests>=2.31",
+    "rich>=13.0",
+    "tomli>=2.0; python_version < '3.11'",
+    "tomli-w>=1.0",
+]
+
+[project.optional-dependencies]
+ai = ["anthropic>=0.25"]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov",
+    "ruff",
+    "mypy",
+]
+
+[project.scripts]
+guardia = "guardia.cli:main"
+
+[project.urls]
+Repository = "https://github.com/pmsosa/guardia"
+Issues = "https://github.com/pmsosa/guardia/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["guardia*"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true

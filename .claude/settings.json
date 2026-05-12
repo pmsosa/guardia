@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.venv/bin/guardia --brew ffmpeg --no-ai --no-clam --verbose)",
+      "Bash(.venv/bin/guardia --brew ffmpeg --no-ai --no-clam --force)",
+      "Bash(.venv/bin/guardia --brew wyattjoh/claude-code-notification/claude-code-notification --no-clam --no-ai --verbose)",
+      "Bash(.venv/bin/guardia --brew gh --no-clam --no-ai)",
+      "Bash(.venv/bin/guardia --local . --no-clam --no-ai --output markdown)",
+      "Bash(.venv/bin/guardia --version)",
+      "Bash(.venv/bin/python -c \"from guardia.modules import ai_review, clamav, metadata, report, resolver, static_analysis, supply_chain; print\\('All modules import OK'\\)\")"
+    ]
+  }
+}
