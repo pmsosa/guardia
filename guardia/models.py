@@ -81,6 +81,7 @@ class MetadataResult:
     risk: RiskLevel
     flags: list[Flag] = field(default_factory=list)
     repo_age_days: Optional[int] = None
+    last_push_days: Optional[int] = None
     stars: Optional[int] = None
     forks: Optional[int] = None
     contributors: Optional[int] = None

@@ -12,7 +12,8 @@
       "Bash(.venv/bin/guardia --brew ffmpeg --force)",
       "Bash(.venv/bin/python -c ' *)",
       "Bash(.venv/bin/python -c \"from guardia.modules import ip_reputation, virustotal, ai_review, report; from guardia import cli; print\\('imports OK'\\)\")",
-      "Bash(.venv/bin/guardia --local . --no-clam --no-ai --quiet)"
+      "Bash(.venv/bin/guardia --local . --no-clam --no-ai --quiet)",
+      "Bash(.venv/bin/python -c \"from guardia.modules import report, metadata; from guardia.models import MetadataResult, RiskLevel; print\\('imports ok'\\)\")"
     ]
   }
 }

@@ -34,15 +34,39 @@ def build_report(
     ip_reputation: Optional[IPReputationResult] = None,
     virustotal: Optional[VirusTotalResult] = None,
 ) -> GuardiaReport:
-    # Static analysis is broad and noisy by design. When the AI review and
-    # ClamAV both clear a package, cap static's contribution to MEDIUM so
-    # pattern noise doesn't dominate the verdict. CRITICAL (pipe-to-shell) is
-    # never capped — that pattern is almost never a false positive.
-    ai_clear = ai is not None and not ai.skipped and ai.risk in (RiskLevel.LOW, RiskLevel.CLEAN)
-    clamav_no_threat = clamav is None or clamav.skipped or clamav.risk == RiskLevel.CLEAN
+    # Trusted signals are high-confidence sources: ClamAV (byte-level AV),
+    # VirusTotal (75 engines), Claude AI review (semantic), AbuseIPDB (IP rep).
+    # Static analysis is intentionally aggressive and produces many false
+    # positives, so it is only advisory. Its risk level is capped based on
+    # what the trusted signals say:
+    #   - Any trusted signal alarmed (HIGH/CRITICAL) → keep static as-is
+    #   - All available trusted signals clear        → static HIGH drops to LOW
+    #   - Some trusted signals clear, none alarmed   → static HIGH caps to MEDIUM
+    #   - No trusted signals ran                     → keep static as-is
+    # CRITICAL flags from static (pipe-to-shell etc.) are never capped — those
+    # patterns are almost never false positives.
+    trusted_results = [
+        r for r in [clamav, virustotal, ai, ip_reputation]
+        if r is not None and not r.skipped
+    ]
+    any_trusted_alarmed = any(
+        r.risk in (RiskLevel.HIGH, RiskLevel.CRITICAL) for r in trusted_results
+    )
+    all_trusted_clear = bool(trusted_results) and all(
+        r.risk in (RiskLevel.LOW, RiskLevel.CLEAN) for r in trusted_results
+    )
+    some_trusted_clear = any(
+        r.risk in (RiskLevel.LOW, RiskLevel.CLEAN) for r in trusted_results
+    )
+
     effective_static_risk = static.risk if static else None
-    if effective_static_risk == RiskLevel.HIGH and ai_clear and clamav_no_threat:
-        effective_static_risk = RiskLevel.MEDIUM
+    if effective_static_risk == RiskLevel.HIGH:
+        if any_trusted_alarmed:
+            pass  # trusted sources confirm the threat — keep HIGH
+        elif all_trusted_clear:
+            effective_static_risk = RiskLevel.LOW
+        elif some_trusted_clear:
+            effective_static_risk = RiskLevel.MEDIUM
 
     active_risks = [
         r.risk for r in [metadata, clamav, supply, ai, ip_reputation, virustotal]
@@ -235,6 +259,9 @@ def _module_detail(result) -> str:
         if result.repo_age_days is not None:
             age = f"{result.repo_age_days // 365}y" if result.repo_age_days >= 365 else f"{result.repo_age_days}d"
             parts.append(f"Repo age: {age}")
+        if result.last_push_days is not None:
+            push = f"{result.last_push_days}d ago" if result.last_push_days > 0 else "today"
+            parts.append(f"Last push: {push}")
         if result.stars is not None:
             parts.append(f"Stars: {result.stars}")
         if result.contributors is not None:
@@ -356,6 +383,7 @@ def _render_json(report: GuardiaReport) -> str:
             base["infected"] = m.infected
         if isinstance(m, MetadataResult):
             base["repo_age_days"] = m.repo_age_days
+            base["last_push_days"] = m.last_push_days
             base["stars"] = m.stars
             base["forks"] = m.forks
             base["contributors"] = m.contributors

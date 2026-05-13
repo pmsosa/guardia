@@ -80,25 +80,45 @@ def _check_github(owner_repo: str, target: ScanTarget, config: dict, verbose: bo
     thresholds = config.get("thresholds", {})
     age_warn = thresholds.get("repo_age_warn_days", 30)
     stars_warn = thresholds.get("repo_stars_warn_below", 10)
+    recent_push_warn = thresholds.get("recent_push_warn_days", 3)
 
     flags: list[Flag] = []
 
     repo_data = _gh_get(f"/repos/{owner_repo}")
     assert isinstance(repo_data, dict)
 
-    # Repo age
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    # Repo creation age
     created_at = repo_data.get("created_at", "")
     repo_age_days: Optional[int] = None
     if created_at:
         try:
             created_dt = datetime.datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-            repo_age_days = (datetime.datetime.now(datetime.timezone.utc) - created_dt).days
+            repo_age_days = (now - created_dt).days
         except ValueError:
             pass
 
     if repo_age_days is not None and repo_age_days < age_warn:
         flags.append(Flag(
             message=f"Repository is only {repo_age_days} days old — newly created repos are higher risk",
+            severity="warn",
+            category="metadata",
+        ))
+
+    # Recent push check — very recent changes are a pipeline attack signal
+    pushed_at = repo_data.get("pushed_at", "")
+    last_push_days: Optional[int] = None
+    if pushed_at:
+        try:
+            pushed_dt = datetime.datetime.fromisoformat(pushed_at.replace("Z", "+00:00"))
+            last_push_days = (now - pushed_dt).days
+        except ValueError:
+            pass
+
+    if last_push_days is not None and last_push_days < recent_push_warn:
+        flags.append(Flag(
+            message=f"Repository was last pushed {last_push_days} day(s) ago — very recent changes increase pipeline attack risk",
             severity="warn",
             category="metadata",
         ))
@@ -188,6 +208,7 @@ def _check_github(owner_repo: str, target: ScanTarget, config: dict, verbose: bo
         risk=risk,
         flags=flags,
         repo_age_days=repo_age_days,
+        last_push_days=last_push_days,
         stars=stars,
         forks=forks,
         contributors=contributors,
