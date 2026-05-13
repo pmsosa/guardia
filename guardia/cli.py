@@ -20,9 +20,9 @@ from .cache import (
     save_cache,
     serialize_scan_results,
 )
-from .config import CONFIG_FILE, get_anthropic_key, load_config, save_config
+from .config import CONFIG_FILE, get_anthropic_key, get_abuseipdb_key, get_virustotal_key, load_config, save_config
 from .models import GuardiaReport, RiskLevel
-from .modules import ai_review, clamav, metadata, report, resolver, static_analysis, supply_chain
+from .modules import ai_review, clamav, ip_reputation, metadata, report, resolver, static_analysis, supply_chain, virustotal
 
 
 # ---------------------------------------------------------------------------
@@ -38,7 +38,7 @@ def _run_setup(ctx: click.Context, _param: click.Parameter, value: bool) -> None
     changed = False
 
     # ── ClamAV ──────────────────────────────────────────────────────────────
-    click.echo("\n[1/2] ClamAV antivirus")
+    click.echo("\n[1/4] ClamAV antivirus")
     if clamav.check_installed():
         if not clamav.configs_exist():
             click.echo("  ⚠ ClamAV installed but config files missing (Homebrew default)")
@@ -73,8 +73,48 @@ def _run_setup(ctx: click.Context, _param: click.Parameter, value: bool) -> None
         else:
             click.echo("  ⚠ Skipping — antivirus scans will be unavailable")
 
+    # ── AbuseIPDB ────────────────────────────────────────────────────────────
+    click.echo("\n[2/4] AbuseIPDB — IP reputation checks")
+    click.echo("  Get a free API key at: https://www.abuseipdb.com/register")
+    existing_abuse = get_abuseipdb_key(cfg)
+    if existing_abuse:
+        source = "environment variable" if os.environ.get("ABUSEIPDB_API_KEY") else "config file"
+        click.echo(f"  ✓ ABUSEIPDB_API_KEY found ({source})")
+    else:
+        click.echo("  ✗ ABUSEIPDB_API_KEY not set — IP reputation checks will be skipped")
+        if click.confirm("  Add your AbuseIPDB API key now?", default=False):
+            key = click.prompt("  Paste your ABUSEIPDB_API_KEY", hide_input=True).strip()
+            if key:
+                cfg.setdefault("api", {})["abuseipdb_key"] = key
+                changed = True
+                click.echo("  ✓ AbuseIPDB key saved to ~/.guardia/config.toml")
+            else:
+                click.echo("  ⚠ Empty key — skipping")
+        else:
+            click.echo("  ⚠ Skipping — IP reputation checks will be unavailable")
+
+    # ── VirusTotal ───────────────────────────────────────────────────────────
+    click.echo("\n[3/4] VirusTotal — artifact hash reputation")
+    click.echo("  Get a free API key at: https://www.virustotal.com/gui/join-us")
+    existing_vt = get_virustotal_key(cfg)
+    if existing_vt:
+        source = "environment variable" if os.environ.get("VT_API_KEY") else "config file"
+        click.echo(f"  ✓ VT_API_KEY found ({source})")
+    else:
+        click.echo("  ✗ VT_API_KEY not set — VirusTotal hash checks will be skipped")
+        if click.confirm("  Add your VirusTotal API key now?", default=False):
+            key = click.prompt("  Paste your VT_API_KEY", hide_input=True).strip()
+            if key:
+                cfg.setdefault("api", {})["virustotal_key"] = key
+                changed = True
+                click.echo("  ✓ VirusTotal key saved to ~/.guardia/config.toml")
+            else:
+                click.echo("  ⚠ Empty key — skipping")
+        else:
+            click.echo("  ⚠ Skipping — VirusTotal checks will be unavailable")
+
     # ── AI backend ──────────────────────────────────────────────────────────
-    click.echo("\n[2/2] AI code review backend")
+    click.echo("\n[4/4] AI code review backend")
 
     existing_key = get_anthropic_key(cfg)
     claude_cli = shutil.which("claude")
@@ -152,6 +192,8 @@ def _run_setup(ctx: click.Context, _param: click.Parameter, value: bool) -> None
               help="Skip ClamAV antivirus scan")
 @click.option("--no-ai",   is_flag=True, default=False,
               help="Skip Claude AI code review")
+@click.option("--vt-upload", is_flag=True, default=False,
+              help="Upload unknown binary artifacts to VirusTotal for scanning (implies consent to send to third party)")
 # Caching
 @click.option("--cache",  is_flag=True, default=False,
               help="Use cached results for previously scanned targets")
@@ -171,6 +213,7 @@ def main(
     output_fmt: Optional[str],
     no_clam: bool,
     no_ai: bool,
+    vt_upload: bool,
     cache: bool,
     force: bool,
     verbose: bool,
@@ -231,14 +274,16 @@ def main(
         if cached and "metadata" in cached:
             if verbose:
                 click.echo("  ← Returning cached result")
-            meta_r, clam_r, static_r, supply_r, ai_r = deserialize_scan_results(cached)
+            meta_r, clam_r, static_r, supply_r, ai_r, ip_r, vt_r = deserialize_scan_results(cached)
             if no_clam:
                 from .models import ClamAVResult
                 clam_r = ClamAVResult(risk=RiskLevel.SKIPPED, skipped=True, skip_reason="Skipped via --no-clam")
             if no_ai:
                 from .models import AIReviewResult
                 ai_r = AIReviewResult(risk=RiskLevel.SKIPPED, skipped=True, skip_reason="Skipped via --no-ai")
-            cached_report = report.build_report(scan_target, meta_r, clam_r, static_r, supply_r, ai_r)
+            cached_report = report.build_report(
+                scan_target, meta_r, clam_r, static_r, supply_r, ai_r, ip_r, vt_r
+            )
             click.echo(report.render(cached_report, output_fmt, quiet=quiet))
             resolver.cleanup(scan_target)
             sys.exit(0)
@@ -248,6 +293,8 @@ def main(
     clam_result = None
     static_result = None
     supply_result = None
+    ip_rep_result = None
+    vt_result = None
     ai_result = None
 
     # Module 2: Metadata & Reputation
@@ -271,12 +318,29 @@ def main(
         _echo_step("Running static analysis…", verbose)
     static_result = static_analysis.analyze(scan_target, verbose=verbose)
 
+    # Module 4b: IP Reputation — runs after static analysis extracts IPs
+    if not quiet:
+        _echo_step("Checking IP reputation (AbuseIPDB)…", verbose)
+    ip_rep_result = ip_reputation.analyze(static_result, cfg, verbose=verbose)
+
     # Module 5: Supply Chain
     if not quiet:
         _echo_step("Analyzing supply chain…", verbose)
     supply_result = supply_chain.analyze(scan_target, verbose=verbose)
 
-    # Module 6: AI Review
+    # Module 5b: VirusTotal hash lookup
+    if vt_upload and not quiet:
+        click.echo(
+            "\n  ⚠  VirusTotal upload enabled: unknown binary artifacts will be sent to virustotal.com\n"
+            "     This is a third-party service — the artifact may be cached or indexed.\n"
+        )
+        if not click.confirm("  Continue with VirusTotal upload?", default=False):
+            vt_upload = False
+    if not quiet:
+        _echo_step("Checking VirusTotal…", verbose)
+    vt_result = virustotal.check(scan_target, cfg, allow_upload=vt_upload, verbose=verbose)
+
+    # Module 6: AI Review (with static pre-digest)
     if not no_ai:
         if not quiet:
             _echo_step("Running AI code review…", verbose)
@@ -287,6 +351,7 @@ def main(
             deep=deep,
             chunking=chunking_strategy,
             verbose=verbose,
+            static_result=static_result,
         )
     else:
         from .models import AIReviewResult
@@ -296,7 +361,8 @@ def main(
 
     # -------------------------------------------------------- report
     final_report = report.build_report(
-        scan_target, meta_result, clam_result, static_result, supply_result, ai_result
+        scan_target, meta_result, clam_result, static_result, supply_result,
+        ai_result, ip_rep_result, vt_result,
     )
     output_text = report.render(final_report, output_fmt, quiet=quiet)
     click.echo(output_text)
@@ -305,7 +371,8 @@ def main(
     if content_hash:
         try:
             save_cache(content_hash, serialize_scan_results(
-                meta_result, clam_result, static_result, supply_result, ai_result
+                meta_result, clam_result, static_result, supply_result,
+                ai_result, ip_rep_result, vt_result,
             ))
         except Exception:
             pass

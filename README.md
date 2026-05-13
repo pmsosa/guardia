@@ -13,7 +13,7 @@
 
 **Multi-layered security analysis for packages, repositories, and local directories.**
 
-`guardia` combines antivirus scanning (ClamAV), static heuristic analysis, supply chain inspection, and AI-powered code review (Claude) to produce a structured risk report before you install or run third-party code.
+`guardia` combines antivirus scanning (ClamAV), static heuristic analysis, IP reputation lookup, VirusTotal hash checks, supply chain inspection, and AI-powered code review (Claude) to produce a structured risk report before you install or run third-party code.
 
 ---
 
@@ -24,8 +24,10 @@
 - **Local directory scanning** — analyze code you've already downloaded
 - **ClamAV integration** — known malware signature detection (optional, graceful skip)
 - **Static analysis** — 30+ heuristic patterns across shell, Python, Ruby, JS, and more
+- **IP reputation** — AbuseIPDB batch lookup for any hardcoded IPs found in code (single API call)
+- **VirusTotal hash check** — looks up the artifact SHA256 against 70+ AV engines; no upload needed for known files
 - **Supply chain checks** — dependency URLs, SHA256 integrity, fork detection, binary vs. source
-- **AI code review** — Claude-powered behavioral assessment via Anthropic API or Claude CLI
+- **AI code review** — Claude-powered behavioral assessment via Anthropic API or Claude CLI, guided by a static analysis pre-digest
 - **Deep mode** — sliding-window batch analysis for large codebases
 - **Structured output** — terminal (rich), JSON, or Markdown
 
@@ -38,6 +40,8 @@
 - Python 3.10+
 - [Optional] ClamAV: `brew install clamav`
 - [Optional] Anthropic API key **or** Claude CLI: `brew install --cask claude`
+- [Optional] AbuseIPDB API key — [get one free](https://www.abuseipdb.com/register)
+- [Optional] VirusTotal API key — [get one free](https://www.virustotal.com/gui/join-us)
 
 ### Install guardia
 
@@ -71,6 +75,8 @@ Options:
                           Output format (default: terminal)
   --no-clam               Skip ClamAV antivirus scan
   --no-ai                 Skip Claude AI code review
+  --vt-upload             Upload unknown binary artifacts to VirusTotal
+                          (requires explicit consent — sends file to third party)
   --cache                 Return cached result if available
   --force                 Ignore cache and re-run all checks
   -v, --verbose           Print step-by-step progress
@@ -99,7 +105,29 @@ guardia --brew ffmpeg --quiet
 
 # Cache-aware re-scan
 guardia --brew ffmpeg --cache
+
+# Upload unknown binary to VirusTotal (confirms before sending)
+guardia --brew some-cask --vt-upload
 ```
+
+---
+
+## Setup
+
+Run the interactive setup wizard to configure all optional integrations:
+
+```bash
+guardia --setup
+```
+
+The wizard walks through four steps:
+
+1. **ClamAV** — installs if missing, updates virus definitions
+2. **AbuseIPDB** — paste your API key to enable IP reputation checks ([get key](https://www.abuseipdb.com/register))
+3. **VirusTotal** — paste your API key to enable artifact hash lookups ([get key](https://www.virustotal.com/gui/join-us))
+4. **AI backend** — configure Anthropic API key or Claude CLI for code review
+
+All keys are saved to `~/.guardia/config.toml`. You can also set them via environment variables (`ABUSEIPDB_API_KEY`, `VT_API_KEY`, `ANTHROPIC_API_KEY`) without touching the config file.
 
 ---
 
@@ -121,6 +149,8 @@ anthropic_key = ""        # or set ANTHROPIC_API_KEY env var
 claude_backend = "auto"   # "auto" | "api" | "cli"
 ```
 
+The AI reviewer receives a **static analysis pre-digest** — a filtered summary of the highest-confidence flags (pipe-to-shell, obfuscation, sensitive file access, etc.) with code snippets — so it can focus on confirming or dismissing real issues rather than rediscovering noise.
+
 ---
 
 ## Configuration
@@ -129,8 +159,10 @@ Config is stored in `~/.guardia/config.toml` and created automatically on first 
 
 ```toml
 [api]
-anthropic_key = ""
-claude_backend = "auto"
+anthropic_key = ""        # or ANTHROPIC_API_KEY env var
+claude_backend = "auto"   # "auto" | "api" | "cli"
+abuseipdb_key = ""        # or ABUSEIPDB_API_KEY env var
+virustotal_key = ""       # or VT_API_KEY env var
 
 [defaults]
 output_format = "terminal"
@@ -146,6 +178,16 @@ freshclam_on_run = false
 [thresholds]
 repo_age_warn_days = 30
 repo_stars_warn_below = 10
+
+[abuseipdb]
+enabled = true
+max_age_days = 30       # how far back to look for abuse reports
+min_score_warn = 11     # score threshold for a warning flag
+min_score_critical = 51 # score threshold for a critical flag
+
+[virustotal]
+enabled = true
+allow_upload = false    # must also pass --vt-upload at CLI to actually upload
 ```
 
 ---
@@ -153,31 +195,50 @@ repo_stars_warn_below = 10
 ## Sample Output
 
 ```
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  guardia report
-  Target:  wyattjoh/claude-code-notification (brew)
-  Scanned: 2026-05-12 10:42:01 UTC
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  ⛨  guardia  v0.1.0  ·  security analysis
 
-  [✓] Metadata & Reputation     LOW
+  ╭──────────────────────────────────────────────────────────╮
+  │  Target:   wyattjoh/claude-code-notification  (brew)     │
+  │  Scanned:  2026-05-13 10:42 UTC                          │
+  ╰──────────────────────────────────────────────────────────╯
+
+  ─────────────────────── scan results ───────────────────────
+
+  [✓] Metadata & Reputation          LOW
       Repo age: 2y | Stars: 143 | Contributors: 4
-
-  [✓] ClamAV Scan               CLEAN
+  [✓] ClamAV Scan                    CLEAN
       12 file(s) scanned. No threats detected.
-
-  [⚠] Static Analysis           MEDIUM
+  [⚠] Static Analysis                MEDIUM
       18 file(s) scanned. 1 flag(s).
-
-  [✓] Supply Chain              LOW
+  [✓] Supply Chain                   LOW
       2 dependencies. No flags.
-
-  [✓] Claude AI Review          LOW  [via api]
+  [–] IP Reputation (AbuseIPDB)      SKIPPED
+      No hardcoded public IPs found
+  [✓] VirusTotal                     LOW
+      0/72 engines — clean
+  [✓] Claude AI Review               LOW  [via api]
       This package adds desktop notifications for Claude Code events.
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  ✓ OVERALL VERDICT: LOW — Likely safe to install
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  ┏━━━━━━━━━━━━━━━━━━━━━━ verdict ━━━━━━━━━━━━━━━━━━━━━━━┓
+  ┃  ✓  LOW  Likely safe to install                       ┃
+  ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 ```
+
+---
+
+## VirusTotal Privacy Model
+
+By default guardia does a **hash-only lookup** — it sends only the SHA256 of the artifact (already present in the Homebrew formula) to VirusTotal, never the file itself. This costs one API call and reveals nothing about the file's contents.
+
+If the hash is unknown to VirusTotal (new or obscure package) and the target is a pre-built binary, you can opt into uploading:
+
+```bash
+guardia --brew some-cask --vt-upload
+```
+
+guardia will warn you and ask for confirmation before uploading. Source code archives (`.rb`, `.py`, `.sh`, `.tar.gz` containing text, etc.) are never uploaded — VirusTotal's AV engines don't meaningfully scan source.
+
+For git/local targets without a known hash, VirusTotal is skipped automatically.
 
 ---
 

@@ -63,7 +63,7 @@ _p("network",    "info",   r'requests\.(get|post|put|patch|delete|head)\s*\(', "
 _p("network",    "info",   r'urllib\.request', "urllib network call")
 _p("network",    "info",   r'fetch\s*\(', "fetch() network call")
 # IPs in configure/test scripts are routine; flag as info only
-_p("network",    "info",   r'\b(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\b', "Hardcoded IP address")
+_p("network",    "info",   r'\b(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\b', "Hardcoded IP address: {match}")
 # Non-HTTPS URLs in changelogs/licenses are not suspicious
 _p("network",    "warn",   r'http://(?!localhost|127\.0\.0\.1|0\.0\.0\.0)\S+', "Non-HTTPS URL", skip_exts=_DOC_EXTS)
 

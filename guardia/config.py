@@ -26,6 +26,8 @@ DEFAULT_CONFIG: dict = {
     "api": {
         "anthropic_key": "",
         "claude_backend": "auto",  # "auto" | "api" | "cli"
+        "abuseipdb_key": "",
+        "virustotal_key": "",
     },
     "defaults": {
         "output_format": "terminal",
@@ -41,6 +43,16 @@ DEFAULT_CONFIG: dict = {
     "thresholds": {
         "repo_age_warn_days": 30,
         "repo_stars_warn_below": 10,
+    },
+    "abuseipdb": {
+        "enabled": True,
+        "max_age_days": 30,
+        "min_score_warn": 11,
+        "min_score_critical": 51,
+    },
+    "virustotal": {
+        "enabled": True,
+        "allow_upload": False,
     },
 }
 
@@ -84,6 +96,8 @@ def _write_default_config() -> None:
             "[api]",
             'anthropic_key = ""',
             'claude_backend = "auto"',
+            'abuseipdb_key = ""',
+            'virustotal_key = ""',
             "",
             "[defaults]",
             'output_format = "terminal"',
@@ -99,6 +113,16 @@ def _write_default_config() -> None:
             "[thresholds]",
             "repo_age_warn_days = 30",
             "repo_stars_warn_below = 10",
+            "",
+            "[abuseipdb]",
+            "enabled = true",
+            "max_age_days = 30",
+            "min_score_warn = 11",
+            "min_score_critical = 51",
+            "",
+            "[virustotal]",
+            "enabled = true",
+            "allow_upload = false",
         ]
         CONFIG_FILE.write_text("\n".join(lines) + "\n")
 
@@ -141,4 +165,20 @@ def get_anthropic_key(config: dict) -> Optional[str]:
     if key:
         return key
     stored = config.get("api", {}).get("anthropic_key", "")
+    return stored or None
+
+
+def get_abuseipdb_key(config: dict) -> Optional[str]:
+    key = os.environ.get("ABUSEIPDB_API_KEY", "")
+    if key:
+        return key
+    stored = config.get("api", {}).get("abuseipdb_key", "")
+    return stored or None
+
+
+def get_virustotal_key(config: dict) -> Optional[str]:
+    key = os.environ.get("VT_API_KEY", "")
+    if key:
+        return key
+    stored = config.get("api", {}).get("virustotal_key", "")
     return stored or None

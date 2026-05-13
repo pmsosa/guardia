@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from ..models import AIReviewResult, Flag, RiskLevel, ScanTarget
+from ..models import AIReviewResult, Flag, RiskLevel, ScanTarget, StaticAnalysisResult
 
 # ---------------------------------------------------------------------------
 # System prompt
@@ -59,6 +59,75 @@ def detect_backend(config: dict) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
+# Static pre-digest helpers
+# ---------------------------------------------------------------------------
+
+# Categories worth forwarding to Claude for semantic confirmation.
+# Omits: network/info (curl, wget, requests — too noisy), hardcoded IPs
+# (handled by AbuseIPDB), binary_embedded (ClamAV's job), hidden_files.
+_DIGEST_CATEGORIES = frozenset({
+    "pipe_shell", "obfuscation", "shell_exec",
+    "exfiltration", "install_hook", "privilege",
+})
+_SEVERITY_RANK = {"critical": 2, "warn": 1, "info": 0}
+
+
+def _get_snippet(base_path: str, rel_file: Optional[str], line_no: Optional[int], context: int = 2) -> str:
+    if not rel_file or not line_no:
+        return ""
+    try:
+        lines = (Path(base_path) / rel_file).read_text(errors="replace").splitlines()
+        start = max(0, line_no - 1 - context)
+        end = min(len(lines), line_no + context)
+        snippet_lines = []
+        for i, ln in enumerate(lines[start:end], start=start + 1):
+            prefix = ">>>" if i == line_no else "   "
+            snippet_lines.append(f"    {prefix} {i:4d}: {ln}")
+        return "\n".join(snippet_lines)
+    except (OSError, PermissionError):
+        return ""
+
+
+def _build_static_digest(static: StaticAnalysisResult, base_path: Optional[str]) -> str:
+    if static.skipped or not static.flags:
+        return ""
+
+    candidates = [
+        f for f in static.flags
+        if f.category in _DIGEST_CATEGORIES and f.severity in ("warn", "critical")
+    ]
+    if not candidates:
+        return ""
+
+    candidates.sort(key=lambda f: _SEVERITY_RANK.get(f.severity, 0), reverse=True)
+    top = candidates[:10]
+    remaining = len(candidates) - len(top)
+
+    lines = [
+        "STATIC ANALYSIS PRE-DIGEST",
+        "The automated scanner flagged the following before this review.",
+        "Confirm, dismiss, or expand on each as part of your analysis.",
+        "",
+    ]
+    for flag in top:
+        loc = flag.format_location() or "unknown location"
+        lines.append(f"[{flag.severity.upper()}] {loc} — {flag.message}")
+        if base_path:
+            snippet = _get_snippet(base_path, flag.file, flag.line)
+            if snippet:
+                lines.append(snippet)
+        lines.append("")
+
+    if remaining:
+        lines.append(
+            f"(and {remaining} more lower-severity flag(s) — full list in static analysis output)"
+        )
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
 
@@ -68,6 +137,7 @@ def review(
     deep: bool = False,
     chunking: str = "sliding_window",
     verbose: bool = False,
+    static_result: Optional[StaticAnalysisResult] = None,
 ) -> AIReviewResult:
     backend = detect_backend(config)
 
@@ -92,11 +162,13 @@ def review(
             skip_reason="No local path to analyze",
         )
 
+    digest = _build_static_digest(static_result, path) if static_result else ""
+
     try:
         if deep:
-            return _deep_review(path, target, backend, config, chunking, verbose)
+            return _deep_review(path, target, backend, config, chunking, verbose, digest)
         else:
-            return _standard_review(path, target, backend, config, verbose)
+            return _standard_review(path, target, backend, config, verbose, digest)
     except Exception as exc:
         return AIReviewResult(
             risk=RiskLevel.ERROR,
@@ -111,7 +183,8 @@ def review(
 # ---------------------------------------------------------------------------
 
 def _standard_review(
-    path: str, target: ScanTarget, backend: str, config: dict, verbose: bool
+    path: str, target: ScanTarget, backend: str, config: dict, verbose: bool,
+    digest: str = "",
 ) -> AIReviewResult:
     MAX_CHARS = 30_000  # ~7500 tokens
 
@@ -120,13 +193,12 @@ def _standard_review(
     files_checked = 0
     base = Path(path)
 
-    # Prioritize: formula source, then small source files
     candidates = _collect_files(base, MAX_CHARS)
 
     for rel, text in candidates:
         chunk = f"\n\n--- FILE: {rel} ---\n{text}"
         if total_chars + len(chunk) > MAX_CHARS:
-            content_parts.append(f"\n\n[... remaining files truncated for token limit ...]")
+            content_parts.append("\n\n[... remaining files truncated for token limit ...]")
             break
         content_parts.append(chunk)
         total_chars += len(chunk)
@@ -137,7 +209,8 @@ def _standard_review(
         content_parts.insert(0, formula_header)
 
     code_content = "\n".join(content_parts)
-    user_message = f"Please review the following code:\n\n{code_content}"
+    prefix = f"{digest}\n\n" if digest else ""
+    user_message = f"{prefix}Please review the following code:\n\n{code_content}"
 
     raw = _call_backend(backend, user_message, config, timeout=120)
     result = _parse_response(raw, backend)
@@ -150,7 +223,8 @@ def _standard_review(
 # ---------------------------------------------------------------------------
 
 def _deep_review(
-    path: str, target: ScanTarget, backend: str, config: dict, chunking: str, verbose: bool
+    path: str, target: ScanTarget, backend: str, config: dict, chunking: str, verbose: bool,
+    digest: str = "",
 ) -> AIReviewResult:
     CHUNK_CHARS = 24_000    # ~6000 tokens per chunk
     OVERLAP_CHARS = 2_000   # ~500 token overlap
@@ -176,7 +250,9 @@ def _deep_review(
     for i, chunk in enumerate(chunk_texts, start=1):
         if verbose:
             print(f"  → Chunk {i}/{len(chunk_texts)} ...")
-        user_message = f"Please review the following code (chunk {i} of {len(chunk_texts)}):\n\n{chunk}"
+        # Inject digest only in the first chunk to avoid redundancy
+        prefix = f"{digest}\n\n" if digest and i == 1 else ""
+        user_message = f"{prefix}Please review the following code (chunk {i} of {len(chunk_texts)}):\n\n{chunk}"
         try:
             raw = _call_backend(backend, user_message, config, timeout=180)
             partial_results.append(_parse_response(raw, backend))

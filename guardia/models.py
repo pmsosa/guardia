@@ -134,6 +134,31 @@ class AIReviewResult:
 
 
 @dataclass
+class IPReputationResult:
+    risk: RiskLevel
+    ips_checked: int = 0
+    flags: list[Flag] = field(default_factory=list)
+    skipped: bool = False
+    skip_reason: str = ""
+    error: Optional[str] = None
+
+
+@dataclass
+class VirusTotalResult:
+    risk: RiskLevel
+    hash_checked: Optional[str] = None
+    detections: Optional[int] = None
+    total_engines: Optional[int] = None
+    detection_names: list[str] = field(default_factory=list)
+    permalink: Optional[str] = None
+    uploaded: bool = False
+    flags: list[Flag] = field(default_factory=list)
+    skipped: bool = False
+    skip_reason: str = ""
+    error: Optional[str] = None
+
+
+@dataclass
 class GuardiaReport:
     target: ScanTarget
     timestamp: datetime.datetime
@@ -143,6 +168,8 @@ class GuardiaReport:
     static_analysis: Optional[StaticAnalysisResult] = None
     supply_chain: Optional[SupplyChainResult] = None
     ai_review: Optional[AIReviewResult] = None
+    ip_reputation: Optional[IPReputationResult] = None
+    virustotal: Optional[VirusTotalResult] = None
 
 
 def aggregate_risk(levels: list[RiskLevel]) -> RiskLevel:

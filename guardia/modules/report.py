@@ -12,12 +12,14 @@ from ..models import (
     ClamAVResult,
     Flag,
     GuardiaReport,
+    IPReputationResult,
     MetadataResult,
     RiskLevel,
     RISK_COLORS,
     RISK_ICONS,
     StaticAnalysisResult,
     SupplyChainResult,
+    VirusTotalResult,
     aggregate_risk,
 )
 
@@ -29,20 +31,21 @@ def build_report(
     static: Optional[StaticAnalysisResult],
     supply: Optional[SupplyChainResult],
     ai: Optional[AIReviewResult],
+    ip_reputation: Optional[IPReputationResult] = None,
+    virustotal: Optional[VirusTotalResult] = None,
 ) -> GuardiaReport:
     # Static analysis is broad and noisy by design. When the AI review and
     # ClamAV both clear a package, cap static's contribution to MEDIUM so
     # pattern noise doesn't dominate the verdict. CRITICAL (pipe-to-shell) is
     # never capped — that pattern is almost never a false positive.
     ai_clear = ai is not None and not ai.skipped and ai.risk in (RiskLevel.LOW, RiskLevel.CLEAN)
-    # ClamAV counts as "not a threat" when it's clean or simply unavailable/skipped
     clamav_no_threat = clamav is None or clamav.skipped or clamav.risk == RiskLevel.CLEAN
     effective_static_risk = static.risk if static else None
-    if (effective_static_risk == RiskLevel.HIGH and ai_clear and clamav_no_threat):
+    if effective_static_risk == RiskLevel.HIGH and ai_clear and clamav_no_threat:
         effective_static_risk = RiskLevel.MEDIUM
 
     active_risks = [
-        r.risk for r in [metadata, clamav, supply, ai]
+        r.risk for r in [metadata, clamav, supply, ai, ip_reputation, virustotal]
         if r is not None
     ]
     if effective_static_risk is not None:
@@ -58,6 +61,8 @@ def build_report(
         static_analysis=static,
         supply_chain=supply,
         ai_review=ai,
+        ip_reputation=ip_reputation,
+        virustotal=virustotal,
     )
 
 
@@ -115,6 +120,8 @@ def _rich_report(console, report: GuardiaReport, quiet: bool) -> None:
         _print_module_row(console, "ClamAV Scan", report.clamav)
         _print_module_row(console, "Static Analysis", report.static_analysis)
         _print_module_row(console, "Supply Chain", report.supply_chain)
+        _print_module_row(console, "IP Reputation (AbuseIPDB)", report.ip_reputation)
+        _print_vt_row(console, report.virustotal)
         _print_ai_row(console, report.ai_review)
         console.print()
 
@@ -151,6 +158,25 @@ def _print_module_row(console, label: str, result) -> None:
         console.print(f"      [dim]{detail}[/dim]")
 
 
+def _print_vt_row(console, result: Optional[VirusTotalResult]) -> None:
+    if result is None:
+        return
+    risk = result.risk
+    color = RISK_COLORS.get(risk, "white")
+    icon = RISK_ICONS.get(risk, "?")
+    risk_label = "SKIPPED" if result.skipped else risk.upper()
+    console.print(
+        f"  [{color}][{icon}] {'VirusTotal':<30} [bold]{risk_label}[/bold][/{color}]"
+    )
+    if result.skipped and result.skip_reason:
+        console.print(f"      [dim]{result.skip_reason}[/dim]")
+    elif result.detections is not None:
+        det = f"{result.detections}/{result.total_engines} engines"
+        uploaded_note = " (uploaded)" if result.uploaded else ""
+        link = f"  [dim link={result.permalink}]{result.permalink}[/dim link]" if result.permalink else ""
+        console.print(f"      [dim]{det}{uploaded_note}{link}[/dim]")
+
+
 def _print_ai_row(console, result: Optional[AIReviewResult]) -> None:
     if result is None:
         return
@@ -174,7 +200,10 @@ def _print_ai_row(console, result: Optional[AIReviewResult]) -> None:
 
 def _print_issues(console, report: GuardiaReport) -> None:
     all_flags: list[Flag] = []
-    for module in [report.metadata, report.static_analysis, report.supply_chain, report.ai_review]:
+    for module in [
+        report.metadata, report.static_analysis, report.supply_chain,
+        report.ip_reputation, report.virustotal, report.ai_review,
+    ]:
         if module and hasattr(module, "flags"):
             all_flags.extend(module.flags)
 
@@ -222,6 +251,15 @@ def _module_detail(result) -> str:
         dep_str = f"{n_deps} dependencies. " if n_deps else ""
         flag_str = f"{n_flags} flag(s)." if n_flags else "No flags."
         return dep_str + flag_str
+    if isinstance(result, IPReputationResult):
+        if not result.flags:
+            return f"{result.ips_checked} IP(s) checked. All clean."
+        warn = sum(1 for f in result.flags if f.severity in ("warn", "critical"))
+        return f"{result.ips_checked} IP(s) checked. {warn} suspicious."
+    if isinstance(result, VirusTotalResult):
+        if result.detections is not None:
+            return f"{result.detections}/{result.total_engines} engines flagged."
+        return ""
     return ""
 
 
@@ -266,6 +304,8 @@ def _render_plain(report: GuardiaReport, quiet: bool) -> str:
         row("ClamAV Scan", report.clamav)
         row("Static Analysis", report.static_analysis)
         row("Supply Chain", report.supply_chain)
+        row("IP Reputation (AbuseIPDB)", report.ip_reputation)
+        row("VirusTotal", report.virustotal)
         if report.ai_review:
             ai = report.ai_review
             icon = RISK_ICONS.get(ai.risk, "?")
@@ -331,6 +371,21 @@ def _render_json(report: GuardiaReport) -> str:
             base["files_checked"] = m.files_checked
         return base
 
+    def module_to_dict_ext(m):
+        if m is None:
+            return None
+        d = module_to_dict(m)
+        if isinstance(m, IPReputationResult):
+            d["ips_checked"] = m.ips_checked
+        if isinstance(m, VirusTotalResult):
+            d["hash_checked"] = m.hash_checked
+            d["detections"] = m.detections
+            d["total_engines"] = m.total_engines
+            d["detection_names"] = m.detection_names
+            d["permalink"] = m.permalink
+            d["uploaded"] = m.uploaded
+        return d
+
     data = {
         "target": report.target.raw,
         "type": report.target.type,
@@ -341,6 +396,8 @@ def _render_json(report: GuardiaReport) -> str:
             "clamav": module_to_dict(report.clamav),
             "static_analysis": module_to_dict(report.static_analysis),
             "supply_chain": module_to_dict(report.supply_chain),
+            "ip_reputation": module_to_dict_ext(report.ip_reputation),
+            "virustotal": module_to_dict_ext(report.virustotal),
             "claude_review": module_to_dict(report.ai_review),
         },
     }
@@ -391,6 +448,8 @@ def _render_markdown(report: GuardiaReport) -> str:
     md_module("ClamAV Scan", report.clamav)
     md_module("Static Analysis", report.static_analysis)
     md_module("Supply Chain", report.supply_chain)
+    md_module("IP Reputation (AbuseIPDB)", report.ip_reputation)
+    md_module("VirusTotal", report.virustotal)
 
     if report.ai_review:
         ai = report.ai_review

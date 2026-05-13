@@ -9,7 +9,10 @@ from typing import Optional, TYPE_CHECKING
 from .config import CACHE_DIR
 
 if TYPE_CHECKING:
-    from .models import MetadataResult, ClamAVResult, StaticAnalysisResult, SupplyChainResult, AIReviewResult
+    from .models import (
+        MetadataResult, ClamAVResult, StaticAnalysisResult,
+        SupplyChainResult, AIReviewResult, IPReputationResult, VirusTotalResult,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -38,7 +41,7 @@ def _base(m) -> dict:
     }
 
 
-def serialize_scan_results(meta, clam, static, supply, ai) -> dict:
+def serialize_scan_results(meta, clam, static, supply, ai, ip_rep=None, vt=None) -> dict:
     def ser_meta(m):
         if m is None:
             return None
@@ -76,19 +79,43 @@ def serialize_scan_results(meta, clam, static, supply, ai) -> dict:
                  verdict=m.verdict, backend=m.backend)
         return d
 
+    def ser_ip_rep(m):
+        if m is None:
+            return None
+        d = _base(m)
+        d.update(flags=_flags_to_list(m.flags), ips_checked=m.ips_checked)
+        return d
+
+    def ser_vt(m):
+        if m is None:
+            return None
+        d = _base(m)
+        d.update(
+            flags=_flags_to_list(m.flags),
+            hash_checked=m.hash_checked,
+            detections=m.detections,
+            total_engines=m.total_engines,
+            detection_names=m.detection_names,
+            permalink=m.permalink,
+            uploaded=m.uploaded,
+        )
+        return d
+
     return {
         "metadata": ser_meta(meta),
         "clamav": ser_clam(clam),
         "static_analysis": ser_static(static),
         "supply_chain": ser_supply(supply),
         "ai_review": ser_ai(ai),
+        "ip_reputation": ser_ip_rep(ip_rep),
+        "virustotal": ser_vt(vt),
     }
 
 
 def deserialize_scan_results(data: dict):
     from .models import (
         MetadataResult, ClamAVResult, StaticAnalysisResult,
-        SupplyChainResult, AIReviewResult, RiskLevel,
+        SupplyChainResult, AIReviewResult, IPReputationResult, VirusTotalResult, RiskLevel,
     )
 
     def rl(s):
@@ -142,12 +169,35 @@ def deserialize_scan_results(data: dict):
             skip_reason=d.get("skip_reason", ""), error=d.get("error"),
         )
 
+    def deser_ip_rep(d) -> Optional[IPReputationResult]:
+        if d is None:
+            return None
+        return IPReputationResult(
+            risk=rl(d["risk"]), flags=_flags_from_list(d.get("flags")),
+            ips_checked=d.get("ips_checked", 0), skipped=d.get("skipped", False),
+            skip_reason=d.get("skip_reason", ""), error=d.get("error"),
+        )
+
+    def deser_vt(d) -> Optional[VirusTotalResult]:
+        if d is None:
+            return None
+        return VirusTotalResult(
+            risk=rl(d["risk"]), flags=_flags_from_list(d.get("flags")),
+            hash_checked=d.get("hash_checked"), detections=d.get("detections"),
+            total_engines=d.get("total_engines"), detection_names=d.get("detection_names", []),
+            permalink=d.get("permalink"), uploaded=d.get("uploaded", False),
+            skipped=d.get("skipped", False), skip_reason=d.get("skip_reason", ""),
+            error=d.get("error"),
+        )
+
     return (
         deser_meta(data.get("metadata")),
         deser_clam(data.get("clamav")),
         deser_static(data.get("static_analysis")),
         deser_supply(data.get("supply_chain")),
         deser_ai(data.get("ai_review")),
+        deser_ip_rep(data.get("ip_reputation")),
+        deser_vt(data.get("virustotal")),
     )
 
 
