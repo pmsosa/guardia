@@ -7,6 +7,7 @@ import json
 import re
 from typing import Optional
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from ..models import Flag, IPReputationResult, RiskLevel, StaticAnalysisResult
@@ -91,46 +92,43 @@ def _check_abuseipdb(
     warn_threshold = cfg.get("min_score_warn", 11)
     critical_threshold = cfg.get("min_score_critical", 51)
 
-    batch = ips[:100]
-    payload = json.dumps({"ipAddresses": batch, "maxAgeInDays": max_age}).encode()
-    req = Request(
-        "https://api.abuseipdb.com/api/v2/check/bulk",
-        data=payload,
-        headers={
-            "Key": api_key,
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        },
-        method="POST",
-    )
-
-    try:
-        with urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read())
-    except HTTPError as exc:
-        if exc.code == 401:
-            return IPReputationResult(
-                risk=RiskLevel.SKIPPED, skipped=True,
-                skip_reason="AbuseIPDB API key invalid (401)",
-            )
-        if exc.code == 429:
-            return IPReputationResult(
-                risk=RiskLevel.SKIPPED, skipped=True,
-                skip_reason="AbuseIPDB rate limit exceeded",
-            )
-        return IPReputationResult(
-            risk=RiskLevel.SKIPPED, skipped=True,
-            skip_reason=f"AbuseIPDB API error: HTTP {exc.code}",
-        )
-    except (URLError, OSError) as exc:
-        return IPReputationResult(
-            risk=RiskLevel.SKIPPED, skipped=True,
-            skip_reason=f"AbuseIPDB network error: {exc}",
-        )
-
+    # AbuseIPDB has no bulk-check endpoint — check each IP individually via GET.
+    batch = ips[:20]  # cap to avoid burning rate limit on large scans
     flags: list[Flag] = []
-    for entry in data.get("data", []):
-        ip = entry.get("ipAddress", "")
+    checked = 0
+
+    for ip in batch:
+        params = urlencode({"ipAddress": ip, "maxAgeInDays": max_age})
+        req = Request(
+            f"https://api.abuseipdb.com/api/v2/check?{params}",
+            headers={"Key": api_key, "Accept": "application/json"},
+        )
+        try:
+            with urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read())
+        except HTTPError as exc:
+            if exc.code == 401:
+                return IPReputationResult(
+                    risk=RiskLevel.SKIPPED, skipped=True,
+                    skip_reason="AbuseIPDB API key invalid (401)",
+                )
+            if exc.code == 429:
+                skip_msg = f"AbuseIPDB rate limit hit after {checked} IP(s)"
+                if checked == 0:
+                    return IPReputationResult(risk=RiskLevel.SKIPPED, skipped=True, skip_reason=skip_msg)
+                break
+            return IPReputationResult(
+                risk=RiskLevel.SKIPPED, skipped=True,
+                skip_reason=f"AbuseIPDB API error: HTTP {exc.code}",
+            )
+        except (URLError, OSError) as exc:
+            return IPReputationResult(
+                risk=RiskLevel.SKIPPED, skipped=True,
+                skip_reason=f"AbuseIPDB network error: {exc}",
+            )
+
+        checked += 1
+        entry = data.get("data", {})
         score = entry.get("abuseConfidenceScore", 0)
         isp = entry.get("isp", "unknown ISP")
         country = entry.get("countryCode", "??")
@@ -164,7 +162,7 @@ def _check_abuseipdb(
             ))
 
     risk = _compute_risk(flags)
-    return IPReputationResult(risk=risk, ips_checked=len(batch), flags=flags)
+    return IPReputationResult(risk=risk, ips_checked=checked, flags=flags)
 
 
 def _compute_risk(flags: list[Flag]) -> RiskLevel:
